@@ -18,7 +18,7 @@ FLAGS =-Wall -std=gnu99 -lm -fopenmp
 EXE_NAME= output.mp
 
 #can have several ones separated by spaces, only cpp files
-SOURCES = prod_matr.c
+SOURCES = src/prod_matr.c
 
 #PATH to extra header used in the project (when using libs not installed in the OS)
 INC_PATHS= -I

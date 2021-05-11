@@ -12,6 +12,7 @@
 int rank; int numproc;
 long ** result_scatter;
 int r;
+int int_size_of_mat;
 
 /*
 int main(int argc, char *argv[]) {
@@ -30,6 +31,7 @@ struct t_table {
     long **tab;
     int nb_line;
     int nb_colon;
+    int nb_elements;
 };
 
 typedef struct t_table *Matrix;
@@ -54,7 +56,7 @@ Matrix create_matrix(int alloc_size) {
     }
     t->tab = tab;
     t->nb_line = t->nb_colon = alloc_size;
-
+    t->nb_elements = 0;
     return t;
 }
 
@@ -62,7 +64,7 @@ Matrix transpose(Matrix mat){
     Matrix to_ret = create_matrix(mat->nb_line);
 
     for(int i = 0; i < mat->nb_line;i++){
-        #pragma omp parallel for
+#pragma omp parallel for
         for(int j = 0; j < mat->nb_line;j++){
             to_ret->tab[i][j] = mat->tab[j][i];
         }
@@ -94,6 +96,76 @@ long* lineariser (Matrix A){
         }
     }
     return table;
+}
+
+static int add_word(Matrix *matrix, int index_line,int index_colon, int my_nb) {
+    Matrix T           = *matrix;
+    long **tab = T->tab;
+    int nb_lign        = T->nb_line;
+    int nb_colon         = T->nb_colon;
+    if (index_colon>=nb_colon) {
+        // La table est pleine, la "rallonger" avant d'essayer d'insérer my_nb
+        nb_lign += 1;
+        nb_colon += 1;
+        tab = realloc(tab, nb_lign*sizeof(long*));
+        if (!tab) {
+            fprintf(stderr, "cannot reallocate memory\n");
+            return 0;
+        }
+        int i = 0;
+
+        for(i=0; i<nb_lign-1;i++){
+            tab[i] = realloc(tab[i] ,nb_colon * sizeof (long ));
+        }
+        tab[i] = (long*)malloc(nb_colon * sizeof (long ));
+
+        // conserver les nouvelles valeurs dans la table
+        T->tab = tab;
+        T->nb_line = nb_lign;
+        T->nb_colon = nb_colon;
+    }
+
+    // Insérer le nouveau number à  la position index
+
+    tab[index_line][index_colon]= my_nb;
+
+    // On a un number de plus dans la table
+    T->nb_elements += 1;
+
+    return 1;                     // car ce number apparaît une fois
+}
+
+Matrix read_file(char** argv){
+    FILE *fp = fopen(argv[1], "r");
+    if (!fp)
+    {
+        fprintf(stderr, "couldn't open file name %s...\n\nProgramme exit with code error -1.\n", argv[1]);
+        exit(EXIT_FAILURE);
+    }
+    else
+    {
+        char ch, buff[50];
+        int j = 0, index_of_colon = 0,index_lign=0;
+        Matrix to_ret = create_matrix(ALLOC_SIZE);
+        do
+        {
+            ch = fgetc(fp);
+            buff[j++]=ch;
+            if(ch==' ' || ch=='\t' || ch == '\n'){
+                buff[j] = '\0';
+                int value = atoi(buff);
+                add_word(&to_ret,index_lign,index_of_colon++, value);
+                if(ch=='\n'){
+                    index_lign ++;
+                    index_of_colon=0;
+                }
+                j = 0;
+            }
+
+        }while(ch!=EOF);
+        fclose(fp);
+        return to_ret;
+    }
 }
 
 void scatter(Matrix A,int send_count,long* recv_data,int recv_count){
@@ -151,13 +223,12 @@ void scatter(Matrix A,int send_count,long* recv_data,int recv_count){
             }
         }
 
-
-       /* printf("\n");
-        printf("r_line_r_colonne = \n");
-        for(int i = 0;i<k;i++){
-            printf("%ld ",r_line_r_colonne[i]);
-        }
-        printf("\n");*/
+        /* printf("\n");
+         printf("r_line_r_colonne = \n");
+         for(int i = 0;i<k;i++){
+             printf("%ld ",r_line_r_colonne[i]);
+         }
+         printf("\n");*/
         for(int i =numproc; i>=2;i--){
             MPI_Send(r_line_r_colonne+(2*A->nb_colon*r*(i-2)),r*A->nb_colon*2,MPI_LONG, (rank+1)%numproc,99,MPI_COMM_WORLD);
         }
@@ -165,6 +236,7 @@ void scatter(Matrix A,int send_count,long* recv_data,int recv_count){
 
     else{
         long* recieved;
+
         for(int i = 0; i<numproc-rank-1;i++){
             recieved = malloc(sizeof(long) * recv_count);
             MPI_Recv(recieved,recv_count,MPI_LONG,((rank-1)+numproc)%numproc,99,MPI_COMM_WORLD,&status);
@@ -175,7 +247,7 @@ void scatter(Matrix A,int send_count,long* recv_data,int recv_count){
         recieved = malloc(sizeof(long) * recv_count);
         MPI_Recv(recieved,recv_count,MPI_LONG,((rank-1)+numproc)%numproc,99,MPI_COMM_WORLD,&status);
 
-        #pragma omp parallel for
+#pragma omp parallel for
         for(int i = 0 ; i<recv_count;i++){
             recv_data[i] = recieved[i];
         }
@@ -193,36 +265,61 @@ void reverse_string(char** string, int len){
 
 }
 
+void broadcast(int size_of_mat){
+    MPI_Status status;
+    if(rank==0){
+        for(int i = 0;i<numproc-1;i++){
+            MPI_Send(&size_of_mat,1,MPI_INT,i+1,99,MPI_COMM_WORLD);
+        }
+    }
+    else{
+
+        MPI_Recv(&int_size_of_mat,1,MPI_INT, 0,99,MPI_COMM_WORLD,&status);
+    }
+}
+
+void circuler(long* r_line_r_colonne, int size){
+    MPI_Status status;
+
+    //MPI_Probe(rank, 99, MPI_COMM_WORLD, &status);
+
+    MPI_Send(r_line_r_colonne,size/2,MPI_LONG, (rank+1)%numproc,99,MPI_COMM_WORLD);
+
+    //MPI_Get_count(&status, MPI_INT, &n_items);
+
+
+    MPI_Recv(r_line_r_colonne,size/2,MPI_LONG, (rank-1)%numproc,99,MPI_COMM_WORLD,&status);
+}
+
 
 void gather(long* send_data,int send_count,long* recv_data,int recv_count,int int_size_of_mat){
 
-  //printf("i'm proecss %d\n", rank);
-  MPI_Status status;
-  if(rank == 0){
+    //printf("i'm proecss %d\n", rank);
+    MPI_Status status;
+    if(rank == 0){
 
-    int i,k=0;
-    for(k = 0; k<send_count; k++){ // save for process 0
-      recv_data[k] = send_data[k];
+        int i,k=0;
+        for(k = 0; k<send_count; k++){ // save for process 0
+            recv_data[k] = send_data[k];
+        }
+        for(i =0 ; i < numproc-1 ; i++){
+            MPI_Recv(recv_data+int_size_of_mat-(recv_count*(i+1)),recv_count,MPI_LONG, numproc-1,99,MPI_COMM_WORLD,&status);
+        }
     }
-    for(i =0 ; i < numproc-1 ; i++){
-      MPI_Recv(recv_data+int_size_of_mat-(recv_count*(i+1)),recv_count,MPI_LONG, numproc-1,99,MPI_COMM_WORLD,&status);
+
+    else{
+
+        long* received;
+
+        MPI_Send(send_data,send_count,MPI_LONG, (rank+1)%numproc,99,MPI_COMM_WORLD);
+        for(int i = 0; i<rank-1;i++){
+            received = malloc(sizeof(long) * recv_count);
+            MPI_Recv(received,recv_count,MPI_LONG,((rank-1)+numproc)%numproc,99,MPI_COMM_WORLD,&status);
+
+            MPI_Send(received,send_count,MPI_LONG, (rank+1)%numproc,99,MPI_COMM_WORLD);
+        }
+
     }
-
-  }
-
-  else{
-
-     
-      long* received;
-
-      MPI_Send(send_data,send_count,MPI_LONG, (rank+1)%numproc,99,MPI_COMM_WORLD);
-      for(int i = 0; i<rank-1;i++){
-        received = malloc(sizeof(long) * recv_count);
-        MPI_Recv(received,recv_count,MPI_LONG,((rank-1)+numproc)%numproc,99,MPI_COMM_WORLD,&status);
-        MPI_Send(received,send_count,MPI_LONG, (rank+1)%numproc,99,MPI_COMM_WORLD);
-      }
-      
-  }
 
 }
 
@@ -236,45 +333,62 @@ void print(Matrix mat){
     }
 }
 
+long minimum(long a, long b){
+    return a<b?a:b;
+}
+
+Matrix compute_next_rank_matrix(Matrix prev, int rank_of_prev_mat){
+    Matrix to_ret = create_matrix(prev->nb_line);
+
+    for(int i = 0;i<prev->nb_line;i++){
+        for(int j = 0;j<prev->nb_colon;j++){
+            if(i == rank_of_prev_mat + 1 || j == rank_of_prev_mat + 1){
+                to_ret->tab[i][j] = prev->tab[i][j];
+            }
+            else {
+                to_ret->tab[i][j] = minimum(prev->tab[i][j], prev->tab[i][rank_of_prev_mat]+prev->tab[rank_of_prev_mat][j]);
+            }
+        }
+    }
+
+    return to_ret;
+}
+
+
 int main(int argc, char *argv[]) {
 
     MPI_Init(&argc, &argv);
     MPI_Comm_size(MPI_COMM_WORLD, &numproc);
     MPI_Comm_rank(MPI_COMM_WORLD, &rank);
 
+    Matrix A = NULL;
 
-    time_t t;
-    srand((unsigned) time(&t));
-    
-    
-    int int_size_of_mat = atoi(argv[1]);
     int recieved_count;
-    Matrix m4x4_A=NULL;
-    int q=int_size_of_mat/numproc,mult_of_lines=q/sqrt(int_size_of_mat);
+
+    int q,mult_of_lines;
     if(rank == 0){
-        m4x4_A = create_matrix(8);
 
+        A = read_file(argv);
 
-        for(int i = 0; i<m4x4_A->nb_line;i++){
-            for(int j = 0;j<m4x4_A->nb_colon;j++){
-                m4x4_A->tab[i][j]=rand() % 50;
-            }
-        }
+        int_size_of_mat = A->nb_elements;
 
-        r  = m4x4_A->nb_line/numproc;
+        r = A->nb_line/numproc;
         printf("A = \n");
-        print(m4x4_A);
+        print(A);
         if(int_size_of_mat % numproc == 0){
             recieved_count = int_size_of_mat/numproc*2;
         }
         else{
-            int rest = m4x4_A->nb_line%numproc;
-            printf("rest = %d\n", rest);
-            recieved_count = 2 *( ((m4x4_A->nb_line/numproc)+rest)*m4x4_A->nb_colon );
+            int rest = A->nb_line%numproc;
+            recieved_count = 2 *( ((A->nb_line/numproc)+rest)*A->nb_colon );
         }
+
     }
-    else{
-        recieved_count = mult_of_lines * sqrt(int_size_of_mat) * 2;
+    broadcast(int_size_of_mat);
+    if(rank!=0){
+        q=int_size_of_mat/numproc;
+        mult_of_lines=q/sqrt(int_size_of_mat);
+        recieved_count =mult_of_lines * sqrt(int_size_of_mat) * 2;
     }
 
     //broadcast(0, t_m3x3_B);*/
@@ -289,11 +403,11 @@ int main(int argc, char *argv[]) {
 
     printf("recieved_count = %d\n",recieved_count);
     long* save_line_colonne = malloc(sizeof(long)*recieved_count);
-    scatter(m4x4_A,0,save_line_colonne,recieved_count);
+    scatter(A,0,save_line_colonne,recieved_count);
     // broadcast line and colums of matrix A and transpos of matrix B
-    int j = 0;
-  /*  switch(rank){
-        case 0:
+    for(int i = 0;i<numproc;i++){
+        int j = 0;
+        if(i == 2){
             printf("i'm the process %d and i've recieved the following table:\n", rank);
             j = 0;
             while(j<recieved_count){
@@ -302,51 +416,32 @@ int main(int argc, char *argv[]) {
 
             printf("\n");
             printf("\n");
-            break;
-        case 1:
-            printf("i'm the process %d and i've recieved the following table:\n", rank);
-            j = 0;
-            while(j<recieved_count){
-                printf("%ld ",save_line_colonne[j++]);
-            }
+        }
+        circuler(save_line_colonne,recieved_count);
 
-            printf("\n");
-            printf("\n");
-            break;
-        case 2:
-            printf("i'm the process %d and i've recieved the following table:\n", rank);
-            j = 0;
-            while(j<recieved_count){
-                printf("%ld ",save_line_colonne[j++]);
-            }
-
-            printf("\n");
-            printf("\n");
-            break;
-        default:
-            printf("i'm the process %d and i've recieved the following table:\n", rank);
-            j = 0;
-            while(j<recieved_count){
-                printf("%ld ",save_line_colonne[j++]);
-            }
-            printf("\n");
-            break;
     }
-*/
+
 
     int send_count = recieved_count/2;
     int recv_count;
     if(rank==0)recv_count =  mult_of_lines * sqrt(int_size_of_mat);
     else recv_count = recieved_count/2;
     long* recieve_the_mat = malloc(sizeof(long) * int_size_of_mat);
-    gather(save_line_colonne,send_count,recieve_the_mat,recv_count,int_size_of_mat);
+    //gather(save_line_colonne,send_count,recieve_the_mat,recv_count,int_size_of_mat);
 
     if(rank == 0){
-      for(int i = 0; i < int_size_of_mat; i++){
-        printf("%ld ",recieve_the_mat[i]);
-      }
-      printf("\n");
+        for(int i = 0; i < int_size_of_mat; i++){
+            printf("%ld ",recieve_the_mat[i]);
+        }
+        printf("\n");
+
+        Matrix third_rank = compute_next_rank_matrix(A,1);
+
+        print(third_rank);
     }
+
+
+
 
     MPI_Finalize();
 

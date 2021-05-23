@@ -155,18 +155,12 @@ void scatter_colum(Matrix A,int send_count,long* recv_data_colum,int recv_count)
         for(i_colone = 0 ; i_colone<recv_count;i_colone++){
             recv_data_colum[k++] = linearize_colonne[i_colone];
         }
-        if(r == 1 && A->nb_line%numproc != 0){
-            for(int i =1; i<numproc;i++){
-                printf("index = %d\n",int_size_of_mat-(r*A->nb_colon)*i);
-                MPI_Send(linearize_colonne+(int_size_of_mat-(r*A->nb_colon)*i),r*A->nb_colon,MPI_LONG, (rank+1)%numproc,99,MPI_COMM_WORLD);
-            }
+
+        for(int i =1; i<numproc;i++){
+            //printf("index = %d\n",int_size_of_mat-(r*A->nb_colon)*(i));
+            MPI_Send(linearize_colonne+(int_size_of_mat-(r*A->nb_colon)*(i)),r*A->nb_colon,MPI_LONG, (rank+1)%numproc,99,MPI_COMM_WORLD);
         }
-        else{
-            for(int i =1; i<numproc;i++){
-                printf("index = %d\n",int_size_of_mat-(r*A->nb_colon)*(i));
-                MPI_Send(linearize_colonne+(int_size_of_mat-(r*A->nb_colon)*(i)),r*A->nb_colon,MPI_LONG, (rank+1)%numproc,99,MPI_COMM_WORLD);
-            }
-        }
+
 
     }
     else{
@@ -217,16 +211,10 @@ void scatter_line(Matrix A,int send_count,long* recv_data_line,int recv_count){
         }
         printf("\n");
 */
-        printf("r = %d\n", r);
-        if(r == 1 && A->nb_line%numproc != 0){
-            for(int i =1; i<numproc;i++){
-                MPI_Send(linearize_lines+(int_size_of_mat-(r*A->nb_colon)*i),r*A->nb_colon,MPI_LONG, (rank+1)%numproc,99,MPI_COMM_WORLD);
-            }
-        }
-        else{
-            for(int i =1; i<numproc;i++){
-                MPI_Send(linearize_lines+(int_size_of_mat-(r*A->nb_colon)*(i)),r*A->nb_colon,MPI_LONG, (rank+1)%numproc,99,MPI_COMM_WORLD);
-            }
+        //printf("r = %d\n", r);
+
+        for(int i =1; i<numproc;i++){
+            MPI_Send(linearize_lines+(int_size_of_mat-(r*A->nb_colon)*(i)),r*A->nb_colon,MPI_LONG, (rank+1)%numproc,99,MPI_COMM_WORLD);
         }
     }
     else{
@@ -311,9 +299,6 @@ void circuler(long** r_line_tmp, int *size){
 
 
 
-
-
-
 void gather(long* send_data,int send_count,long* recv_data,int recv_count){
     MPI_Status status;
 
@@ -353,9 +338,9 @@ void gather(long* send_data,int send_count,long* recv_data,int recv_count){
 
 void print(Matrix mat){
     for(int i = 0;i<mat->nb_line;i++){
-        printf("\t");
         for (int j = 0; j < mat->nb_colon; j++) {
-            printf("%ld ",mat->tab[i][j]);
+            if(mat->tab[i][j]==INFINI)printf("i ");
+            else printf("%ld ",mat->tab[i][j]);
         }
         printf("\n");
     }
@@ -364,39 +349,6 @@ long minimum(long a, long b){
     return a<b?a:b;
 }
 
-
-void rearange_table(long** table_bis, int size){
-    long* table = *table_bis;
-    long buff[size];
-    printf("size = %d\n",size);
-    int one_line_colum = sqrt(int_size_of_mat);
-    int r_local = size/one_line_colum;
-    int k = 0;
-    int l = 1;
-    for(int i = 0;i<r_local;i++){
-        int counter = i;
-
-        for(int j = 0;j< one_line_colum;j++){
-            buff[k++] = table[counter];
-            printf("\tcounter = %d\n",counter);
-            if(counter+one_line_colum>=size){
-                counter = l*r_local+i;
-                l++;
-            }
-            else{
-                counter += one_line_colum;
-            }
-        }
-        l = 1;
-        printf("\n");
-    }
-
-#pragma omp parallel for
-    for(int i = 0;i<size;i++){
-        table[i] = buff[i];
-    }
-    *table_bis = table;
-}
 
 
 void calcule(long *save_line,long * save_colum, long ** N_r_matrix,
@@ -504,13 +456,13 @@ int get_start_line(int r_x_N){
     else{
         int N = sqrt(int_size_of_mat);
         int rest = N%numproc;
-        int bigest_r = N/numproc+rest;
-        int sum_to_ret = bigest_r;
+        int biggest_r = N/numproc+rest;
+        int sum_to_ret = biggest_r;
         sum_to_ret = sum_to_ret+(rank-1)*r_x_N;
         return sum_to_ret;
     }
 }
-
+// found on stackOverFlow
 int mod(int a, int b)
 {
     int r = a % b;
@@ -532,8 +484,8 @@ int main(int argc, char *argv[]) {
         r = A->nb_line/numproc;
 
         w = compute_from(A);
-        printf("w = \n");
-        print(w);
+        /*printf("w = \n");
+        print(w);*/
         if(int_size_of_mat % numproc == 0){
             recieved_count = int_size_of_mat/numproc;
         }
@@ -578,7 +530,7 @@ int main(int argc, char *argv[]) {
               for(int l = 0;l<recieved_count;l++)printf("%ld ",save_resulte_for_proc_i[l]);
               printf("\n");
               printf("\n");
-            }*/
+            }
             int j = 0;
             if(i == 0){
                 printf("i'm the process %d and i've recieved the following table:\n", rank);
@@ -589,14 +541,14 @@ int main(int argc, char *argv[]) {
                 }
                 printf("\n");
                 printf("\n");
-            }
+            }*/
             circuler(&save_line,&recieved_count);
             start = mod(start-recieved_count/N,N);
 
             counter_of_circulation++;
 
         }
-        printf("rank = %d computed :\n",rank);
+        /*printf("rank = %d computed :\n",rank);
         for(int i = 0;i<N;i++){
             for(int j = 0;j<r_colone;j++){
                 printf("%ld ",N_r_matrix[i][j]);
@@ -604,7 +556,7 @@ int main(int argc, char *argv[]) {
             printf("\n");
 
         }
-        printf("\n");
+        printf("\n");*/
         recieved_count = save_recieved_count;
 
         /*printf("i'm the process %d and i've computed the following table:\n", rank);
@@ -630,12 +582,9 @@ int main(int argc, char *argv[]) {
 
         w_i = create_matrix_from_table(recieve_the_mat);
         w = w_i;
-        if(rank == 0){
-            printf("w^i = \n");
-            print(w_i);
-        }
 
     }
+    if(rank == 0)print(w);
     /*
     printf("\n");
     printf("\n");

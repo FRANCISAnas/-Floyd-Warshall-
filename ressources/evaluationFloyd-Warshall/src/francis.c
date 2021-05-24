@@ -13,10 +13,11 @@ int rank; int numproc;
 long ** result_scatter;
 int r;
 int int_size_of_mat;
+int N;
 
 
 #define INFINI LONG_MAX
-#define ALLOC_SIZE 4
+#define ALLOC_SIZE 2
 struct t_table {
     long **tab;
     int nb_line;
@@ -35,7 +36,7 @@ void print(Matrix mat);
 Matrix create_matrix(int alloc_size) {
     Matrix t         = malloc(sizeof(struct t_table));
     long **tab = (long**)malloc(alloc_size * sizeof(long*));
-#pragma omp parallel for
+    #pragma omp parallel for
     for(int i=0; i<alloc_size;i++)
         tab[i] = (long*)malloc(alloc_size * sizeof (long ));
     if (!t || !tab) {
@@ -51,8 +52,9 @@ Matrix create_matrix(int alloc_size) {
 
 Matrix transpose(Matrix mat){
     Matrix to_ret = create_matrix(mat->nb_line);
+    #pragma omp parallel for
     for(int i = 0; i < mat->nb_line;i++){
-#pragma omp parallel for
+        #pragma omp parallel for
         for(int j = 0; j < mat->nb_line;j++){
             to_ret->tab[i][j] = mat->tab[j][i];
         }
@@ -63,18 +65,22 @@ Matrix transpose(Matrix mat){
 
 void destroy_matrix(Matrix *table){
     Matrix T = *table;
-#pragma omp parallel for
+    #pragma omp parallel for
     for(int i = 0;i<T->nb_line;i++)
         free(T->tab[i]);
     free(T);
     *table = NULL; // good programmer habit
 }
+
+
 long* lineariser (Matrix A){
-    int k = 0;
+
     long* table = malloc(sizeof(long)*A->nb_line*A->nb_colon);
+    #pragma omp parallel for
     for(int i = 0;i<A->nb_line;i++){
+        #pragma omp parallel for
         for(int j = 0; j<A->nb_colon; j++){
-            table[k++] = A->tab[i][j];
+            table[i*A->nb_colon+j] = A->tab[i][j];
         }
     }
     return table;
@@ -95,7 +101,8 @@ static int add_word(Matrix *matrix, int index_line,int index_colon, int my_nb) {
             fprintf(stderr, "cannot reallocate memory\n");
             return 0;
         }
-        int i = 0;
+        int i=0;
+        #pragma omp parallel for
         for(i=0; i<nb_lign-1;i++){
             tab[i] = realloc(tab[i] ,nb_colon * sizeof (long ));
         }
@@ -148,21 +155,20 @@ Matrix read_file(char** argv){
 
 void scatter_colum(Matrix A,int send_count,long* recv_data_colum,int recv_count){
     MPI_Status status;
+
     if(rank == 0){
         Matrix t_A = transpose(A);
         long* linearize_colonne = lineariser(t_A);
-        int k = 0, i_colone = 0;
-        for(i_colone = 0 ; i_colone<recv_count;i_colone++){
-            recv_data_colum[k++] = linearize_colonne[i_colone];
+        #pragma omp parallel for
+        for(int i_colone = 0 ; i_colone<recv_count;i_colone++){
+            recv_data_colum[i_colone] = linearize_colonne[i_colone];
         }
 
         for(int i =1; i<numproc;i++){
-            //printf("index = %d\n",int_size_of_mat-(r*A->nb_colon)*(i));
             MPI_Send(linearize_colonne+(int_size_of_mat-(r*A->nb_colon)*(i)),r*A->nb_colon,MPI_LONG, (rank+1)%numproc,99,MPI_COMM_WORLD);
         }
-
-
     }
+
     else{
         long* recieved;
         for(int i = 0; i<numproc-rank-1;i++){
@@ -181,12 +187,12 @@ void scatter_colum(Matrix A,int send_count,long* recv_data_colum,int recv_count)
 
 long* lineariser_column(long** table, int recv_count){
     long* to_ret = malloc(sizeof(long)* recv_count);
-    int N = sqrt(int_size_of_mat);
     int r_local = recv_count/N;
-    int k = 0;
+    #pragma omp parallel for
     for(int i = 0;i<r_local;i++){
+        #pragma omp parallel for
         for(int j = 0;j<N;j++){
-            to_ret[k++] = table[j][i];
+            to_ret[j+i*N] = table[j][i];
         }
     }
     return to_ret;
@@ -195,23 +201,12 @@ long* lineariser_column(long** table, int recv_count){
 void scatter_line(Matrix A,int send_count,long* recv_data_line,int recv_count){
     MPI_Status status;
     if(rank == 0){ // si on est emetteur
-        /*int rest = A->nb_line%numproc;
-        int size_of_recv_data=recv_count + rest*A->nb_colon;
-        recv_data = malloc(sizeof(long) * size_of_recv_data);
-     */
+
         long* linearize_lines = lineariser(A);
-        int k = 0, i_lines = 0;
-        for(i_lines = 0 ; i_lines<recv_count;i_lines++){
-            recv_data_line[k++] = linearize_lines[i_lines];
+        #pragma omp parallel for
+        for(int i_lines = 0 ; i_lines<recv_count;i_lines++){
+            recv_data_line[i_lines] = linearize_lines[i_lines];
         }
-        /*
-        printf("linearize_lines = \n");
-        for(int i = 0;i<A->nb_line * A->nb_colon; i++){
-            printf("%ld ",linearize_lines[i]);
-        }
-        printf("\n");
-*/
-        //printf("r = %d\n", r);
 
         for(int i =1; i<numproc;i++){
             MPI_Send(linearize_lines+(int_size_of_mat-(r*A->nb_colon)*(i)),r*A->nb_colon,MPI_LONG, (rank+1)%numproc,99,MPI_COMM_WORLD);
@@ -233,15 +228,6 @@ void scatter_line(Matrix A,int send_count,long* recv_data_line,int recv_count){
     }
 }
 
-void reverse_string(char** string, int len){
-    char* str = *string;
-    char temp;
-    for(int i = 0; i<len/2;i++){
-        temp = str[i];
-        str[i] = str[len-i-1];
-        str[len-i-1] = temp;
-    }
-}
 
 
 void broadcast(int* size_of_mat){
@@ -261,12 +247,13 @@ void broadcast(int* size_of_mat){
 }
 
 Matrix create_matrix_from_table(long *tab){
-    int nb_line = sqrt(int_size_of_mat);
-    Matrix to_ret = create_matrix(nb_line);
-    int k = 0;
-    for(int i = 0;i<nb_line;i++){
-        for(int j = 0;j<nb_line;j++){
-            to_ret->tab[i][j] = tab[k++];
+
+    Matrix to_ret = create_matrix(N);
+    #pragma omp parallel for
+    for(int i = 0;i<N;i++){
+        #pragma omp parallel for
+        for(int j = 0;j<N;j++){
+            to_ret->tab[i][j] = tab[i*N+j];
         }
     }
 
@@ -304,27 +291,19 @@ void gather(long* send_data,int send_count,long* recv_data,int recv_count){
 
     if(rank == 0){
 
-
-        /*printf("send_data:\n");
-        for(int i = 0;i<send_count;i++){
-            printf("%ld ",send_data[i]);
-        }
-        printf("\n");*/
         int i,k;
+        #pragma omp parallel for
         for(k = 0; k<send_count; k++){ // save for process 0
             //printf("%ld ",send_data[k]);
             recv_data[k] = send_data[k];
         }
-
         for(i =0 ; i < numproc-1 ; i++){
             MPI_Recv(recv_data+int_size_of_mat-(recv_count*(i+1)),recv_count,MPI_LONG, numproc-1,99,MPI_COMM_WORLD,&status);
         }
     }
 
     else{
-        /*
-          printf("send_count = %d\n",send_count);
-          printf("recv_count = %d\n",recv_count);*/
+
         long* received;
         MPI_Send(send_data,send_count,MPI_LONG, (rank+1)%numproc,99,MPI_COMM_WORLD);
         for(int i = 0; i<rank-1;i++){
@@ -351,36 +330,21 @@ long minimum(long a, long b){
 
 
 
-void calcule(long *save_line,long * save_colum, long ** N_r_matrix,
-             int recv_count, int nb_circulations, int r_colone, int start){
+void calcule_r_line_r_colon(long *save_line,long * save_colum, long ** N_r_matrix,
+             int recv_count, int r_colone, int start){
 
-    /*if(rank==1){
-        printf("rank = %d\n",rank);
-        for (int i = 0;i<recv_count;i++){
-            printf("%ld ",save_line[i]);
-        }
-        printf("\n");
-    }*/
-    //printf("nb_circulations = %d\n",nb_circulations);
-    int one_line_colum = sqrt(int_size_of_mat);
-    int r_local = recv_count/one_line_colum;
-/*    if(rank == 1){
-      printf("recv_count = %d\n",recv_count);
-      printf("r_local = %d\n",r_local);
-      printf("r_colone = %d\n",r_colone);
-      printf("\n");
-      printf("\n");
-    }*/
+    int r_local = recv_count/N;
+
     for(int i = 0;i<r_local;i++){
+        #pragma omp parallel for
         for(int j = 0;j<r_colone;j++){
             long cur_min = INFINI;
-            //int pos = (((rank-nb_circulations) * r_local)+one_line_colum+j)%one_line_colum;
-            //printf("pos = %d, rank = %d\n",pos,rank);
-            for(long k=0; k<one_line_colum; k++){
-                long colum_value = save_colum[j*one_line_colum+k];
-                long line_value = save_line[i*one_line_colum+k];
 
-                //printf("line_value = %ld, colum_value = %ld\n",line_value, colum_value);
+            for(int k=0; k<N; k++){
+
+                long line_value = save_line[i*N+k];
+                long colum_value = save_colum[j*N+k];
+
                 long total;
                 if(line_value == INFINI || colum_value == INFINI){
                     total = INFINI;
@@ -390,49 +354,23 @@ void calcule(long *save_line,long * save_colum, long ** N_r_matrix,
                 }
                 cur_min = minimum(total, cur_min);
             }
-            //printf("\n");
 
             N_r_matrix[start][j] = cur_min;
         }
         start++;
     }
 
-    /*printf("\n");
-   if(r_local != 1){
-     rearange_table(&save_resulte_for_proc_i, recv_count);
-   }
-   printf("after:\n");
-   printf("save_resulte_for_proc_i:\n");
-   for(int i = 0;i<recv_count;i++){
-     printf("%ld ",save_resulte_for_proc_i[i]);
-   }
-   printf("\n");*/
-}
-
-
-Matrix compute_next_rank_matrix(Matrix prev, int rank_of_prev_mat){
-    Matrix to_ret = create_matrix(prev->nb_line);
-    for(int i = 0;i<prev->nb_line;i++){
-        for(int j = 0;j<prev->nb_colon;j++){
-            if(i == rank_of_prev_mat + 1 || j == rank_of_prev_mat + 1){
-                to_ret->tab[i][j] = prev->tab[i][j];
-            }
-            else {
-                to_ret->tab[i][j] = minimum(prev->tab[i][j], prev->tab[i][rank_of_prev_mat]+prev->tab[rank_of_prev_mat][j]);
-            }
-        }
-    }
-    return to_ret;
 }
 
 
 Matrix compute_from(Matrix mat){
     Matrix to_ret = create_matrix(mat->nb_line);
 
+    #pragma omp parallel for
     for(int i = 0;i<mat->nb_line;i++){
         #pragma omp parallel for
         for(int j = 0;j<mat->nb_colon;j++){
-            if(i == j){
+            if(i == j && mat->tab[i][j] == 0){
                 to_ret->tab[i][j] = 0;
             }
             else if(mat->tab[i][j] > 0){
@@ -448,13 +386,10 @@ Matrix compute_from(Matrix mat){
 }
 
 
-
 int get_start_line(int r_x_N){
     if(rank == 0)return 0;
 
-
     else{
-        int N = sqrt(int_size_of_mat);
         int rest = N%numproc;
         int biggest_r = N/numproc+rest;
         int sum_to_ret = biggest_r;
@@ -462,6 +397,7 @@ int get_start_line(int r_x_N){
         return sum_to_ret;
     }
 }
+
 // found on stackOverFlow
 int mod(int a, int b)
 {
@@ -469,6 +405,88 @@ int mod(int a, int b)
     return r < 0 ? r + b : r;
 }
 
+void computation(Matrix* address_w, int* address_reieved_count,int mult_of_lines ){
+
+    int recieved_count = *address_reieved_count;
+    Matrix w = *address_w;
+
+    Matrix w_power_i = NULL;
+    int r_colone = recieved_count/N;
+
+    int save_recieved_count = recieved_count;
+    long* save_line = malloc(sizeof(long)*recieved_count);
+    long* save_colum = malloc(sizeof(long)*recieved_count);
+    scatter_colum(w,0,save_colum,recieved_count);
+    for(int i = 0;i<N;i++){
+
+        scatter_line(w,0,save_line,recieved_count);
+        long** N_r_matrix = malloc(sizeof(long*) * N);
+        #pragma omp parallel for
+        for(int count_r = 0;count_r<N;count_r++){
+            N_r_matrix[count_r] = malloc(sizeof(long) * r_colone);
+        }
+
+        int start = get_start_line(save_recieved_count/N);
+
+        for(int i = 0;i<numproc;i++){
+            calcule_r_line_r_colon(save_line, save_colum, N_r_matrix,recieved_count, r_colone,start);
+
+            circuler(&save_line,address_reieved_count);
+
+            recieved_count = *address_reieved_count;
+
+            start = mod(start-recieved_count/N,N);
+
+        }
+
+        recieved_count = save_recieved_count;
+
+        int send_count = recieved_count;
+        int recv_count;
+        if (rank == 0)recv_count = mult_of_lines * N;
+        else recv_count = recieved_count;
+        long* recieve_the_mat = malloc(sizeof(long) * int_size_of_mat);
+
+        long* linearisedN_x_rMatrix = lineariser_column(N_r_matrix, recieved_count);
+        gather(linearisedN_x_rMatrix,send_count,recieve_the_mat,recv_count);
+
+        w_power_i = create_matrix_from_table(recieve_the_mat);
+        w = w_power_i;
+
+    }
+    *address_w = w;
+    if(rank == 0){
+        free(save_colum);
+        free(save_line);
+        /*#pragma omp parallel for
+        for(int count_r = 0;count_r<N;count_r++){
+             free(N_r_matrix[count_r]);
+        }
+        free(N_r_matrix);*/
+    }
+}
+
+
+void initialization(char** argv,Matrix* address_A, Matrix* address_w, int* add_recieved_count){
+
+    int recieved_count = *add_recieved_count;
+    Matrix A = *address_A;
+    A = read_file(argv);
+    int_size_of_mat = A->nb_elements;
+    r = A->nb_line/numproc;
+
+    *address_w = compute_from(A);
+
+    if(A->nb_line % numproc == 0){
+        recieved_count = int_size_of_mat/numproc;
+    }
+    else{
+        int rest = A->nb_line%numproc;
+        recieved_count = ( (r+rest)*A->nb_colon );
+    }
+    *address_A = A;
+    *add_recieved_count = recieved_count;
+}
 
 int main(int argc, char *argv[]) {
     MPI_Init(&argc, &argv);
@@ -479,121 +497,25 @@ int main(int argc, char *argv[]) {
     int recieved_count;
     int q,mult_of_lines;
     if(rank == 0){
-        A = read_file(argv);
-        int_size_of_mat = A->nb_elements;
-        r = A->nb_line/numproc;
-
-        w = compute_from(A);
-        /*printf("w = \n");
-        print(w);*/
-        if(int_size_of_mat % numproc == 0){
-            recieved_count = int_size_of_mat/numproc;
-        }
-        else{
-            int rest = A->nb_line%numproc;
-            recieved_count = ( ((A->nb_line/numproc)+rest)*A->nb_colon );
-        }
+        initialization(argv,&A,&w,&recieved_count);
     }
     broadcast(&int_size_of_mat);
-    int N = sqrt(int_size_of_mat);
+    N = sqrt(int_size_of_mat);
     q=int_size_of_mat/numproc;
     mult_of_lines=q/N;
 
     if(rank!=0){
-        recieved_count =mult_of_lines * sqrt(int_size_of_mat);
+        recieved_count =mult_of_lines * N;
     }
-    Matrix w_i = NULL;
 
-    int r_colone = recieved_count/sqrt(int_size_of_mat);
+    computation(&w,&recieved_count, mult_of_lines);
 
-    //printf("recieved_count = %d\n",recieved_count);
-    int save_recieved_count = recieved_count;
-    long* save_line = malloc(sizeof(long)*recieved_count);
-    long* save_colum = malloc(sizeof(long)*recieved_count);
-    scatter_colum(w,0,save_colum,recieved_count);
-    int nb_lines = sqrt(int_size_of_mat);
-    for(int i = 0;i<nb_lines;i++){
-
-        scatter_line(w,0,save_line,recieved_count);
-        long** N_r_matrix = malloc(sizeof(long*) * N);
-        #pragma omp parallel for
-        for(int count_r = 0;count_r<N;count_r++){
-            N_r_matrix[count_r] = malloc(sizeof(long) * r_colone);
-        }
-        int counter_of_circulation = 0;
-        int start = get_start_line(save_recieved_count/N);
-        // broadcast line and colums of matrix A and transpos of matrix B
-        for(int i = 0;i<numproc;i++){
-            calcule(save_line, save_colum, N_r_matrix,recieved_count,counter_of_circulation, r_colone,start);
-            /*if(rank == 3){
-              printf("save_resulte_for_proc_i:\n");
-              for(int l = 0;l<recieved_count;l++)printf("%ld ",save_resulte_for_proc_i[l]);
-              printf("\n");
-              printf("\n");
-            }
-            int j = 0;
-            if(i == 0){
-                printf("i'm the process %d and i've recieved the following table:\n", rank);
-                j = 0;
-
-                while(j<recieved_count){
-                  printf("%ld ",save_line[j++]);
-                }
-                printf("\n");
-                printf("\n");
-            }*/
-            circuler(&save_line,&recieved_count);
-            start = mod(start-recieved_count/N,N);
-
-            counter_of_circulation++;
-
-        }
-        /*printf("rank = %d computed :\n",rank);
-        for(int i = 0;i<N;i++){
-            for(int j = 0;j<r_colone;j++){
-                printf("%ld ",N_r_matrix[i][j]);
-            }
-            printf("\n");
-
-        }
-        printf("\n");*/
-        recieved_count = save_recieved_count;
-
-        /*printf("i'm the process %d and i've computed the following table:\n", rank);
-        for(int k = 0;k<recieved_count;k++){
-          printf("%ld ",save_resulte_for_proc_i[k]);
-        }
-        printf("\n");
-        printf("\n");
-        */
-        int send_count = recieved_count;
-        int recv_count;
-        if (rank == 0)recv_count = mult_of_lines * sqrt(int_size_of_mat);
-        else recv_count = recieved_count;
-        long* recieve_the_mat = malloc(sizeof(long) * int_size_of_mat);
-        /*printf("rank = %d\n", rank);
-        //for(int l = 0;l<recieved_count;l++)printf("%ld ",save_resulte_for_proc_i[l]);
-        printf("\n");
-        printf("\n");
-        printf("send_count = %d\n",send_count);
-        printf("recv_count = %d\n",recv_count);*/
-        long* linearisedN_x_rMatrix = lineariser_column(N_r_matrix, recieved_count);
-        gather(linearisedN_x_rMatrix,send_count,recieve_the_mat,recv_count);
-
-        w_i = create_matrix_from_table(recieve_the_mat);
-        w = w_i;
-
+    if(rank == 0){
+        print(w);
+        destroy_matrix(&A);
+        destroy_matrix(&w);
     }
-    if(rank == 0)print(w);
-    /*
-    printf("\n");
-    printf("\n");
-   if(rank == 0){
-        printf("w^i = \n");
-        print(w_i);
-    }*/
+
     MPI_Finalize();
     return 0;
 }
-
-

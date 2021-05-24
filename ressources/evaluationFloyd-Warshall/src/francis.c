@@ -5,7 +5,8 @@
 #include <stdio.h>
 #include <math.h>
 #include "mpi.h"
-#include<time.h>
+#include <time.h>
+#include <sys/time.h>
 #include <string.h>
 #include <limits.h>
 
@@ -102,7 +103,6 @@ static int add_word(Matrix *matrix, int index_line,int index_colon, int my_nb) {
             return 0;
         }
         int i=0;
-        #pragma omp parallel for
         for(i=0; i<nb_lign-1;i++){
             tab[i] = realloc(tab[i] ,nb_colon * sizeof (long ));
         }
@@ -294,7 +294,6 @@ void gather(long* send_data,int send_count,long* recv_data,int recv_count){
         int i,k;
         #pragma omp parallel for
         for(k = 0; k<send_count; k++){ // save for process 0
-            //printf("%ld ",send_data[k]);
             recv_data[k] = send_data[k];
         }
         for(i =0 ; i < numproc-1 ; i++){
@@ -330,13 +329,11 @@ long minimum(long a, long b){
 
 
 
-void calcule_r_line_r_colon(long *save_line,long * save_colum, long ** N_r_matrix,
-             int recv_count, int r_colone, int start){
+void calcule_r_line_r_colon(long *save_line,long * save_colum, long ** N_r_matrix,int recv_count, int r_colone, int start){
 
     int r_local = recv_count/N;
 
     for(int i = 0;i<r_local;i++){
-        #pragma omp parallel for
         for(int j = 0;j<r_colone;j++){
             long cur_min = INFINI;
 
@@ -406,7 +403,7 @@ int mod(int a, int b)
 }
 
 void computation(Matrix* address_w, int* address_reieved_count,int mult_of_lines ){
-
+    struct timeval start_ticking, end_ticking;
     int recieved_count = *address_reieved_count;
     Matrix w = *address_w;
 
@@ -418,7 +415,10 @@ void computation(Matrix* address_w, int* address_reieved_count,int mult_of_lines
     long* save_colum = malloc(sizeof(long)*recieved_count);
     scatter_colum(w,0,save_colum,recieved_count);
     for(int i = 0;i<N;i++){
-
+        if(rank == 0){
+            //we take the current time and store it in start
+            gettimeofday(&start_ticking, NULL);
+        }
         scatter_line(w,0,save_line,recieved_count);
         long** N_r_matrix = malloc(sizeof(long*) * N);
         #pragma omp parallel for
@@ -451,9 +451,21 @@ void computation(Matrix* address_w, int* address_reieved_count,int mult_of_lines
         gather(linearisedN_x_rMatrix,send_count,recieve_the_mat,recv_count);
 
         w_power_i = create_matrix_from_table(recieve_the_mat);
+        //free(recieve_the_mat);
         w = w_power_i;
+        if(rank == 0){
+            //we  store the current time in end
+            gettimeofday(&end_ticking, NULL);
 
+
+            //timeval is a struct with 2 parts for time, one in seconds and the other in
+            //microseconds. So we convert everything to microseconds before computing
+            //the elapsed time
+            //printf("time = %ld\n", ((end_ticking.tv_sec * 1000000 + end_ticking.tv_usec)
+              //               - (start_ticking.tv_sec * 1000000 + start_ticking.tv_usec)));
+        }
     }
+
     *address_w = w;
     if(rank == 0){
         free(save_colum);
@@ -463,7 +475,9 @@ void computation(Matrix* address_w, int* address_reieved_count,int mult_of_lines
              free(N_r_matrix[count_r]);
         }
         free(N_r_matrix);*/
+        //destroy_matrix(&w_power_i);
     }
+
 }
 
 

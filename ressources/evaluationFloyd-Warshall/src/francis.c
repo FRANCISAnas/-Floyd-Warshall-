@@ -153,7 +153,54 @@ Matrix read_file(char** argv){
 }
 
 
-void scatter_colum(Matrix A,int send_count,long* recv_data_colum,int recv_count){
+
+
+long* lineariser_column(long** matrix, int r_x_nb_lines){
+    long* to_ret = malloc(sizeof(long)* r_x_nb_lines);
+    int r_line = r_x_nb_lines/N;
+    #pragma omp parallel for
+    for(int i = 0;i<r_line;i++){
+        #pragma omp parallel for
+        for(int j = 0;j<N;j++){
+            to_ret[j+i*N] = matrix[j][i];
+        }
+    }
+    return to_ret;
+}
+
+void scatter_line(Matrix A,long* save_data,int recv_count){
+    MPI_Status status;
+    if(rank == 0){ // if we're the sender
+
+        long* linearize_lines = lineariser(A);
+        #pragma omp parallel for
+        for(int i_lines = 0 ; i_lines<recv_count;i_lines++){ //save the 1st r lines inside the buffer
+            save_data[i_lines] = linearize_lines[i_lines];
+        }
+
+        // send the rest of elements to the next process. Starting from the last r x N elements.
+        for(int i =1; i<numproc;i++){
+            MPI_Send(linearize_lines+(int_size_of_mat-(r*A->nb_colon)*(i)),r*A->nb_colon,MPI_LONG, (rank+1)%numproc,99,MPI_COMM_WORLD);
+        }
+    }
+
+    else{
+        long* recieved;
+        for(int i = 0; i<numproc-rank-1;i++){
+            recieved = malloc(sizeof(long) * recv_count);
+            MPI_Recv(recieved,recv_count,MPI_LONG,((rank-1)+numproc)%numproc,99,MPI_COMM_WORLD,&status);
+            MPI_Send(recieved,recv_count,MPI_LONG,(rank+1)%numproc,99,MPI_COMM_WORLD);
+        }
+        recieved = malloc(sizeof(long) * recv_count);
+        MPI_Recv(recieved,recv_count,MPI_LONG,((rank-1)+numproc)%numproc,99,MPI_COMM_WORLD,&status);
+        #pragma omp parallel for
+        for(int i = 0 ; i<recv_count;i++){
+            save_data[i] = recieved[i];
+        }
+    }
+}
+
+void scatter_colum(Matrix A,long* save_data,int recv_count){
     MPI_Status status;
 
     if(rank == 0){
@@ -161,7 +208,7 @@ void scatter_colum(Matrix A,int send_count,long* recv_data_colum,int recv_count)
         long* linearize_colonne = lineariser(t_A);
         #pragma omp parallel for
         for(int i_colone = 0 ; i_colone<recv_count;i_colone++){
-            recv_data_colum[i_colone] = linearize_colonne[i_colone];
+            save_data[i_colone] = linearize_colonne[i_colone];
         }
 
         for(int i =1; i<numproc;i++){
@@ -180,50 +227,7 @@ void scatter_colum(Matrix A,int send_count,long* recv_data_colum,int recv_count)
         MPI_Recv(recieved,recv_count,MPI_LONG,((rank-1)+numproc)%numproc,99,MPI_COMM_WORLD,&status);
         #pragma omp parallel for
         for(int i = 0 ; i<recv_count;i++){
-            recv_data_colum[i] = recieved[i];
-        }
-    }
-}
-
-long* lineariser_column(long** table, int recv_count){
-    long* to_ret = malloc(sizeof(long)* recv_count);
-    int r_local = recv_count/N;
-    #pragma omp parallel for
-    for(int i = 0;i<r_local;i++){
-        #pragma omp parallel for
-        for(int j = 0;j<N;j++){
-            to_ret[j+i*N] = table[j][i];
-        }
-    }
-    return to_ret;
-}
-
-void scatter_line(Matrix A,int send_count,long* recv_data_line,int recv_count){
-    MPI_Status status;
-    if(rank == 0){ // si on est emetteur
-
-        long* linearize_lines = lineariser(A);
-        #pragma omp parallel for
-        for(int i_lines = 0 ; i_lines<recv_count;i_lines++){
-            recv_data_line[i_lines] = linearize_lines[i_lines];
-        }
-
-        for(int i =1; i<numproc;i++){
-            MPI_Send(linearize_lines+(int_size_of_mat-(r*A->nb_colon)*(i)),r*A->nb_colon,MPI_LONG, (rank+1)%numproc,99,MPI_COMM_WORLD);
-        }
-    }
-    else{
-        long* recieved;
-        for(int i = 0; i<numproc-rank-1;i++){
-            recieved = malloc(sizeof(long) * recv_count);
-            MPI_Recv(recieved,recv_count,MPI_LONG,((rank-1)+numproc)%numproc,99,MPI_COMM_WORLD,&status);
-            MPI_Send(recieved,recv_count,MPI_LONG,(rank+1)%numproc,99,MPI_COMM_WORLD);
-        }
-        recieved = malloc(sizeof(long) * recv_count);
-        MPI_Recv(recieved,recv_count,MPI_LONG,((rank-1)+numproc)%numproc,99,MPI_COMM_WORLD,&status);
-        #pragma omp parallel for
-        for(int i = 0 ; i<recv_count;i++){
-            recv_data_line[i] = recieved[i];
+            save_data[i] = recieved[i];
         }
     }
 }
@@ -262,9 +266,9 @@ Matrix create_matrix_from_table(long *tab){
 
 
 void circuler(long** r_line_tmp, int *size){
+    MPI_Status status;
     int number;//nb d'entiers que l'on doit faire circuler
     long* r_line = *r_line_tmp;
-    MPI_Status status;
     long *recv;
     if(rank%2 == 0){
         MPI_Send(r_line,*size,MPI_LONG, (rank+1)%numproc,99,MPI_COMM_WORLD);
@@ -284,31 +288,30 @@ void circuler(long** r_line_tmp, int *size){
     *size = number;
 }
 
-
-
-void gather(long* send_data,int send_count,long* recv_data,int recv_count){
+void gather(long* data,int nb_to_send,long* save_into,int nb_to_recv){
     MPI_Status status;
 
     if(rank == 0){
 
         int i,k;
         #pragma omp parallel for
-        for(k = 0; k<send_count; k++){ // save for process 0
-            recv_data[k] = send_data[k];
+        for(k = 0; k<nb_to_send; k++){ // save for process 0
+            save_into[k] = data[k];
         }
+
+        // recieve elements starting with the last one, and we put it at the end.
         for(i =0 ; i < numproc-1 ; i++){
-            MPI_Recv(recv_data+int_size_of_mat-(recv_count*(i+1)),recv_count,MPI_LONG, numproc-1,99,MPI_COMM_WORLD,&status);
+            MPI_Recv(save_into+int_size_of_mat-(nb_to_recv*(i+1)),nb_to_recv,MPI_LONG, numproc-1,99,MPI_COMM_WORLD,&status);
         }
     }
 
     else{
-
         long* received;
-        MPI_Send(send_data,send_count,MPI_LONG, (rank+1)%numproc,99,MPI_COMM_WORLD);
+        MPI_Send(data,nb_to_send,MPI_LONG, (rank+1)%numproc,99,MPI_COMM_WORLD);
         for(int i = 0; i<rank-1;i++){
-            received = malloc(sizeof(long) * recv_count);
-            MPI_Recv(received,recv_count,MPI_LONG,((rank-1)+numproc)%numproc,99,MPI_COMM_WORLD,&status);
-            MPI_Send(received,send_count,MPI_LONG, (rank+1)%numproc,99,MPI_COMM_WORLD);
+            received = malloc(sizeof(long) * nb_to_recv);
+            MPI_Recv(received,nb_to_recv,MPI_LONG,((rank-1)+numproc)%numproc,99,MPI_COMM_WORLD,&status);
+            MPI_Send(received,nb_to_send,MPI_LONG, (rank+1)%numproc,99,MPI_COMM_WORLD);
         }
     }
 }
@@ -323,17 +326,19 @@ void print(Matrix mat){
         printf("\n");
     }
 }
+
+
 long minimum(long a, long b){
     return a<b?a:b;
 }
 
+// compute and put the result, of matrix product of 2 matrix of (r,N) and (N,r), inside the matrix N_r_matrix that has N lines and r column
+void calcule_r_line_r_colon(long *save_line,long * save_colum, long ** N_r_matrix,int r_x_nb_lines, int r_colone, int start){
 
+    int r_line = r_x_nb_lines/N;
 
-void calcule_r_line_r_colon(long *save_line,long * save_colum, long ** N_r_matrix,int recv_count, int r_colone, int start){
-
-    int r_local = recv_count/N;
-
-    for(int i = 0;i<r_local;i++){
+    for(int i = 0;i<r_line;i++){
+        #pragma omp parallel num_threads(3)
         for(int j = 0;j<r_colone;j++){
             long cur_min = INFINI;
 
@@ -343,6 +348,7 @@ void calcule_r_line_r_colon(long *save_line,long * save_colum, long ** N_r_matri
                 long colum_value = save_colum[j*N+k];
 
                 long total;
+
                 if(line_value == INFINI || colum_value == INFINI){
                     total = INFINI;
                 }
@@ -352,15 +358,14 @@ void calcule_r_line_r_colon(long *save_line,long * save_colum, long ** N_r_matri
                 cur_min = minimum(total, cur_min);
             }
 
-            N_r_matrix[start][j] = cur_min;
+            N_r_matrix[start][j] = cur_min; // we computed start previously so we know where to start from
         }
-        start++;
+        start++; 
     }
-
 }
 
 
-Matrix compute_from(Matrix mat){
+Matrix compute_and_get_w_from(Matrix mat){
     Matrix to_ret = create_matrix(mat->nb_line);
 
     #pragma omp parallel for
@@ -389,9 +394,7 @@ int get_start_line(int r_x_N){
     else{
         int rest = N%numproc;
         int biggest_r = N/numproc+rest;
-        int sum_to_ret = biggest_r;
-        sum_to_ret = sum_to_ret+(rank-1)*r_x_N;
-        return sum_to_ret;
+        return biggest_r+(rank-1)*r_x_N;
     }
 }
 
@@ -402,56 +405,64 @@ int mod(int a, int b)
     return r < 0 ? r + b : r;
 }
 
-void computation(Matrix* address_w, int* address_reieved_count,int mult_of_lines ){
+void computation(Matrix* address_w, int* address_r_x_nb_lines,int mult_of_lines ){
     struct timeval start_ticking, end_ticking;
-    int recieved_count = *address_reieved_count;
+    int r_x_nb_lines = *address_r_x_nb_lines;
     Matrix w = *address_w;
 
     Matrix w_power_i = NULL;
-    int r_colone = recieved_count/N;
+    int r_colone = r_x_nb_lines/N;
 
-    int save_recieved_count = recieved_count;
-    long* save_line = malloc(sizeof(long)*recieved_count);
-    long* save_colum = malloc(sizeof(long)*recieved_count);
-    scatter_colum(w,0,save_colum,recieved_count);
+    int save_r_x_nb_lines = r_x_nb_lines;
+    long* save_line = malloc(sizeof(long)*r_x_nb_lines);
+    long* save_colum = malloc(sizeof(long)*r_x_nb_lines);
+    scatter_colum(w, save_colum, r_x_nb_lines); // all process will have the same line as we're going to compute w^i x w
+
+    // step of computation ti compute w^N.
     for(int i = 0;i<N;i++){
         if(rank == 0){
             //we take the current time and store it in start
             gettimeofday(&start_ticking, NULL);
         }
-        scatter_line(w,0,save_line,recieved_count);
-        long** N_r_matrix = malloc(sizeof(long*) * N);
+
+        scatter_line(w, save_line, r_x_nb_lines); // at each iteration we scatter/gather the new matrix
+        long** N_r_matrix = malloc(sizeof(long*) * N); // Matrix in which we're going to store the result of
+                                                            // computation for each r line and r column
         #pragma omp parallel for
         for(int count_r = 0;count_r<N;count_r++){
             N_r_matrix[count_r] = malloc(sizeof(long) * r_colone);
         }
 
-        int start = get_start_line(save_recieved_count/N);
+        int start = get_start_line(save_r_x_nb_lines/N);// get the start line for each process
 
         for(int i = 0;i<numproc;i++){
-            calcule_r_line_r_colon(save_line, save_colum, N_r_matrix,recieved_count, r_colone,start);
+            calcule_r_line_r_colon(save_line, save_colum, N_r_matrix,r_x_nb_lines, r_colone,start);
 
-            circuler(&save_line,address_reieved_count);
+            circuler(&save_line,address_r_x_nb_lines);
 
-            recieved_count = *address_reieved_count;
+            r_x_nb_lines = *address_r_x_nb_lines;
 
-            start = mod(start-recieved_count/N,N);
+            start = mod(start-r_x_nb_lines/N,N); // start at the new line given by the number of r lines we have.
 
         }
 
-        recieved_count = save_recieved_count;
+        r_x_nb_lines = save_r_x_nb_lines;
 
-        int send_count = recieved_count;
-        int recv_count;
-        if (rank == 0)recv_count = mult_of_lines * N;
-        else recv_count = recieved_count;
+        int nb_to_send = r_x_nb_lines;
+        int nb_to_recv;
+        if (rank == 0)nb_to_recv = mult_of_lines * N; // for gathering the process 0 must know how many r line
+                                                        // each process has. because we're using a ring structure
+                                                        // for transfering datas between process.
+        else nb_to_recv = r_x_nb_lines;
         long* recieve_the_mat = malloc(sizeof(long) * int_size_of_mat);
 
-        long* linearisedN_x_rMatrix = lineariser_column(N_r_matrix, recieved_count);
-        gather(linearisedN_x_rMatrix,send_count,recieve_the_mat,recv_count);
-
-        w_power_i = create_matrix_from_table(recieve_the_mat);
-        //free(recieve_the_mat);
+        long* linearisedN_x_rMatrix = lineariser_column(N_r_matrix, r_x_nb_lines);
+        gather(linearisedN_x_rMatrix,nb_to_send,recieve_the_mat,nb_to_recv); // each process has computed it's column
+                                                                                // we're gethering inside p0 as table 1D
+        //free the memmory at each iteration.
+        free(linearisedN_x_rMatrix);
+        w_power_i = create_matrix_from_table(recieve_the_mat); // transforming 1D table into 2D table.
+        free(recieve_the_mat);
         w = w_power_i;
         if(rank == 0){
             //we  store the current time in end
@@ -462,44 +473,46 @@ void computation(Matrix* address_w, int* address_reieved_count,int mult_of_lines
             //microseconds. So we convert everything to microseconds before computing
             //the elapsed time
             //printf("time = %ld\n", ((end_ticking.tv_sec * 1000000 + end_ticking.tv_usec)
-              //               - (start_ticking.tv_sec * 1000000 + start_ticking.tv_usec)));
+            //               - (start_ticking.tv_sec * 1000000 + start_ticking.tv_usec)));
+            #pragma omp parallel for
+            for(int count_r = 0;count_r<N;count_r++){
+                free(N_r_matrix[count_r]);
+            }
+            free(N_r_matrix);
         }
+
     }
 
     *address_w = w;
     if(rank == 0){
         free(save_colum);
         free(save_line);
-        /*#pragma omp parallel for
-        for(int count_r = 0;count_r<N;count_r++){
-             free(N_r_matrix[count_r]);
-        }
-        free(N_r_matrix);*/
+
         //destroy_matrix(&w_power_i);
     }
 
 }
 
 
-void initialization(char** argv,Matrix* address_A, Matrix* address_w, int* add_recieved_count){
+void initialization(char** argv,Matrix* address_A, Matrix* address_w, int* add_r_x_nb_lines){
 
-    int recieved_count = *add_recieved_count;
+    int r_x_nb_lines = *add_r_x_nb_lines;
     Matrix A = *address_A;
     A = read_file(argv);
     int_size_of_mat = A->nb_elements;
     r = A->nb_line/numproc;
 
-    *address_w = compute_from(A);
+    *address_w = compute_and_get_w_from(A);
 
     if(A->nb_line % numproc == 0){
-        recieved_count = int_size_of_mat/numproc;
+        r_x_nb_lines = int_size_of_mat/numproc;
     }
     else{
         int rest = A->nb_line%numproc;
-        recieved_count = ( (r+rest)*A->nb_colon );
+        r_x_nb_lines = ( (r+rest)*A->nb_colon );
     }
     *address_A = A;
-    *add_recieved_count = recieved_count;
+    *add_r_x_nb_lines = r_x_nb_lines;
 }
 
 int main(int argc, char *argv[]) {
@@ -508,24 +521,30 @@ int main(int argc, char *argv[]) {
     MPI_Comm_rank(MPI_COMM_WORLD, &rank);
     Matrix A = NULL;
     Matrix w = NULL;
-    int recieved_count;
+    int r_x_nb_lines;
     int q,mult_of_lines;
     if(rank == 0){
-        initialization(argv,&A,&w,&recieved_count);
+        initialization(argv,&A,&w,&r_x_nb_lines);
     }
-    broadcast(&int_size_of_mat);
+
+    broadcast(&int_size_of_mat);// all process should know what is the size of the matrix
     N = sqrt(int_size_of_mat);
-    q=int_size_of_mat/numproc;
-    mult_of_lines=q/N;
+    q=int_size_of_mat/numproc; // number of elements divided by nb of process so we can know how much elements
+                                // each process should have EVENLY except of process 0 whose going to take the rest
+                                // in addition.
+    mult_of_lines=q/N; // this variable is going to determine how many lines all the other process will have
+                        // they should all have the SAME number of lines
+                        // only process 0 will have the rest of euclidean division between numproc and number of lines of the matrix
 
     if(rank!=0){
-        recieved_count =mult_of_lines * N;
+        r_x_nb_lines =mult_of_lines * N;
     }
 
-    computation(&w,&recieved_count, mult_of_lines);
+    computation(&w,&r_x_nb_lines, mult_of_lines);
 
     if(rank == 0){
         print(w);
+        // free the heap
         destroy_matrix(&A);
         destroy_matrix(&w);
     }

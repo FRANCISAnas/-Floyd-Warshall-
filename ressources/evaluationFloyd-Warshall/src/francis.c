@@ -28,11 +28,34 @@ struct t_table {
 
 typedef struct t_table *Matrix;
 
-Matrix create_matrix(int alloc_size);
+ /**
+  * prototypes
+  * */
 
-void destroy_matrix(Matrix *table);
 
-void print(Matrix mat);
+Matrix create_matrix(int alloc_size);// O(1) in parallel
+void destroy_matrix(Matrix *table);// O(1) in parallel
+void print(Matrix mat);// O(N²)
+Matrix transpose(Matrix mat);// O(1) in parallel
+long* lineariser (Matrix A);// O(1) in parallel
+Matrix read_file(char** argv);// O(N)
+long* lineariser_column(long** matrix, int r_x_nb_lines);// O(1) in parallel
+void scatter_line(Matrix A,long* save_data,int recv_count);// O(l+Bt)
+void scatter_colum(Matrix A,long* save_data,int recv_count); // O(l+Bt)
+void broadcast(int* size_of_mat);// O(l+Bt)
+Matrix create_matrix_from_table(long *tab);// O(1) in parallel
+void circuler(long** r_line_tmp, int *size); // O(1) each process is going to send/receive
+void gather(long* data,int nb_to_send,long* save_into,int nb_to_recv);
+void calcule_r_line_r_colon(long *save_line,long * save_column,
+                            long ** N_r_matrix,int r_x_nb_lines, int r_colone, int start);
+long minimum(long a, long b); // O(1)
+Matrix compute_and_get_w_from(Matrix mat);// O(1) see specification on https://lms.univ-cotedazur.fr/course/view.php?id=1302
+int get_start_line(int r_lines);// O(1) knowing the rank of process and the value of r we can guess from where to start
+void initialization(char** argv,Matrix* address_A, Matrix* address_w, int* add_r_x_nb_lines); // read files and
+                                                                                            // initilize the matrix w
+                                                                                            // O(N)
+int mod(int,int);// O(1) gives a positive number when making a%b (even if a < 0)
+
 
 Matrix create_matrix(int alloc_size) {
     Matrix t         = malloc(sizeof(struct t_table));
@@ -249,6 +272,7 @@ void broadcast(int* size_of_mat){
     }
 }
 
+
 Matrix create_matrix_from_table(long *tab){
 
     Matrix to_ret = create_matrix(N);
@@ -332,7 +356,8 @@ long minimum(long a, long b){
 }
 
 // compute and put the result, of matrix product of 2 matrix of (r,N) and (N,r), inside the matrix N_r_matrix that has N lines and r column
-void calcule_r_line_r_colon(long *save_line,long * save_colum, long ** N_r_matrix,int r_x_nb_lines, int r_colone, int start){
+void calcule_r_line_r_colon(long *save_line,long * save_column,
+                            long ** N_r_matrix,int r_x_nb_lines, int r_colone, int start){
 
     int r_line = r_x_nb_lines/N;
 
@@ -343,15 +368,15 @@ void calcule_r_line_r_colon(long *save_line,long * save_colum, long ** N_r_matri
             for(int k=0; k<N; k++){
 
                 long line_value = save_line[i*N+k];
-                long colum_value = save_colum[j*N+k];
+                long column_value = save_column[j*N+k];
 
                 long total;
 
-                if(line_value == INFINI || colum_value == INFINI){
+                if(line_value == INFINI || column_value == INFINI){
                     total = INFINI;
                 }
                 else{
-                    total = line_value + colum_value;
+                    total = line_value + column_value;
                 }
                 cur_min = minimum(total, cur_min);
             }
@@ -387,118 +412,14 @@ Matrix compute_and_get_w_from(Matrix mat){
 
 
 // this function will return the nb of line at which each process will start knowing it's rank and r, r = nb_lines/numproc
-int get_start_line(int r_x_N){
+int get_start_line(int r_lines){
     if(rank == 0)return 0;
 
     else{
         int rest = N%numproc;
         int biggest_r = N/numproc+rest;
-        return biggest_r+(rank-1)*r_x_N;
+        return biggest_r+(rank-1)*r_lines;
     }
-}
-
-
-// found on stackOverFlow
-int mod(int a, int b)
-{
-    int r = a % b;
-    return r < 0 ? r + b : r;
-}
-
-void computation(Matrix* address_w, int* address_r_x_nb_lines,int mult_of_lines ){
-    struct timeval start_ticking, end_ticking;
-    int r_x_nb_lines = *address_r_x_nb_lines;
-    Matrix w = *address_w;
-
-    Matrix w_power_i = NULL;
-    int r_colone = r_x_nb_lines/N;
-
-    int save_r_x_nb_lines = r_x_nb_lines; // r x nb_lines is nb of elements in each r line.
-                                            // it's different for the process 0 if N is not a multiple of N
-                                            // as the process 0 will take the rest of remaining lines
-                                            // result of euclidean division between nb of line of the matrix and
-                                            // nb of process.
-                                            // this variable will be update at each circulation. Therefore the
-                                            // other process will have this huge number of lines to compute it with
-                                            // their column.
-    long* save_line = malloc(sizeof(long)*r_x_nb_lines);
-    long* save_colum = malloc(sizeof(long)*r_x_nb_lines);
-    scatter_colum(w, save_colum, r_x_nb_lines); // all process will have the same line as we're going to compute w^i x w
-
-    // step of computation ti compute w^N.
-    for(int i = 0;i<N;i++){
-        if(rank == 0){
-            //we take the current time and store it in start
-            gettimeofday(&start_ticking, NULL);
-        }
-
-        scatter_line(w, save_line, r_x_nb_lines); // at each iteration we scatter/gather the new matrix
-        long** N_r_matrix = malloc(sizeof(long*) * N); // Matrix in which we're going to store the result of
-                                                            // computation for each r line and r column
-        #pragma omp parallel for
-        for(int count_r = 0;count_r<N;count_r++){
-            N_r_matrix[count_r] = malloc(sizeof(long) * r_colone);
-        }
-
-        int start = get_start_line(save_r_x_nb_lines/N);// get the start line for each process
-
-        for(int i = 0;i<numproc;i++){
-            calcule_r_line_r_colon(save_line, save_colum, N_r_matrix,r_x_nb_lines, r_colone,start);
-
-            circuler(&save_line,address_r_x_nb_lines);// we change the size of matrix
-                                                        // therefore we update the variable r_x_nb_lines
-                                                        // by giving its address to the function circuler.
-
-            r_x_nb_lines = *address_r_x_nb_lines;
-
-            start = mod(start-r_x_nb_lines/N,N); // start at the new line given by the number of r lines we have.
-
-        }
-
-        r_x_nb_lines = save_r_x_nb_lines;
-
-        int nb_to_send = r_x_nb_lines;
-        int nb_to_recv;
-        if (rank == 0)nb_to_recv = mult_of_lines * N; // for gathering the process 0 must know how many r line
-                                                        // each process has. because we're using a ring structure
-                                                        // for transferring data between process.
-        else nb_to_recv = r_x_nb_lines;
-        long* recieve_the_mat = malloc(sizeof(long) * int_size_of_mat);
-
-        long* linearisedN_x_rMatrix = lineariser_column(N_r_matrix, r_x_nb_lines);
-        gather(linearisedN_x_rMatrix,nb_to_send,recieve_the_mat,nb_to_recv); // each process has computed it's column
-                                                                                // we're gethering inside p0 as table 1D
-        //free the memory at each iteration.
-        free(linearisedN_x_rMatrix);
-        w_power_i = create_matrix_from_table(recieve_the_mat); // transforming 1D table into 2D table.
-        free(recieve_the_mat);
-        w = w_power_i;
-        if(rank == 0){
-            //we  store the current time in end
-            gettimeofday(&end_ticking, NULL);
-
-            // Uncomment the bellow printf(...) to see the time of each iteration of the process P0.
-
-            //timeval is a struct with 2 parts for time, one in seconds and the other in
-            //microseconds. So we convert everything to microseconds before computing
-            //the elapsed time
-            //printf("time = %ld\n", ((end_ticking.tv_sec * 1000000 + end_ticking.tv_usec)
-            //               - (start_ticking.tv_sec * 1000000 + start_ticking.tv_usec)));
-            #pragma omp parallel for
-            for(int count_r = 0;count_r<N;count_r++){
-                free(N_r_matrix[count_r]);
-            }
-            free(N_r_matrix);
-        }
-    }
-
-    *address_w = w;
-    if(rank == 0){ // free the heap
-        free(save_colum);
-        free(save_line);
-
-    }
-
 }
 
 
@@ -524,10 +445,17 @@ void initialization(char** argv,Matrix* address_A, Matrix* address_w, int* add_r
 }
 
 
-int main(int argc, char *argv[]) {
-    MPI_Init(&argc, &argv);
-    MPI_Comm_size(MPI_COMM_WORLD, &numproc);
-    MPI_Comm_rank(MPI_COMM_WORLD, &rank);
+// found on stackOverFlow
+int mod(int a, int b)
+{
+    int r = a % b;
+    return r < 0 ? r + b : r;
+}
+
+void floyd_workshall(char**argv){
+
+    struct timeval start_ticking, end_ticking;
+
     Matrix A = NULL;
     Matrix w = NULL;
     int r_x_nb_lines;
@@ -543,21 +471,123 @@ int main(int argc, char *argv[]) {
                                 // in addition.
     mult_of_lines=q/N; // this variable is going to determine how many lines all the other process will have
                         // they should all have the SAME number of lines
-                        // only process 0 will have the rest of euclidean division between numproc and number of lines of the matrix
+                        // only process 0 will have the rest of euclidean division between numproc and number of lines
+                        // of the matrix
 
     if(rank!=0){
         r_x_nb_lines =mult_of_lines * N;
     }
 
-    computation(&w,&r_x_nb_lines, mult_of_lines);
+    Matrix w_power_i = NULL;
+    int r_colone = r_x_nb_lines/N;
 
-    if(rank == 0){
-        print(w);
-        // free the heap
-        destroy_matrix(&A);
-        destroy_matrix(&w);
+    int save_r_x_nb_lines = r_x_nb_lines; // r x nb_lines is nb of elements in each r line.
+                                            // it's different for the process 0 if N is not a multiple of N
+                                            // as the process 0 will take the rest of remaining lines
+                                            // result of euclidean division between nb of line of the matrix and
+                                            // nb of process.
+                                            // this variable will be update at each circulation. Therefore the
+                                            // other process will have this huge number of lines to compute it with
+                                            // their column. So we need to save so we can know at the end of circualtion
+                                            // of each iterations what is the exact size of the result table, that
+                                            // each process has computed
+
+    long* save_line = malloc(sizeof(long)*r_x_nb_lines);
+    long* save_colum = malloc(sizeof(long)*r_x_nb_lines);
+    scatter_colum(w, save_colum, r_x_nb_lines); // all process will have the same line as we're going to compute w^i x w
+
+    // loop to compute w^N.
+    for(int i = 0;i<N;i++){
+        if(rank == 0){
+            //we take the current time and store it in start
+            gettimeofday(&start_ticking, NULL);
+        }
+
+        scatter_line(w, save_line, r_x_nb_lines); // at each iteration we scatter/gather the new matrix w^i
+        long** N_r_matrix = malloc(sizeof(long*) * N); // Matrix in which we're going to store the result of
+                                                            // computation for each r line and r column
+
+        #pragma omp parallel for
+        for(int count_r = 0;count_r<N;count_r++){
+            N_r_matrix[count_r] = malloc(sizeof(long) * r_colone);
+        }
+
+        int start = get_start_line(save_r_x_nb_lines/N);// get the start line for each process
+
+        // this loop is going to compute for eache process the r lines and r columns and place it
+        // inside the N x r matrix (for each process) we will gather those N x r matrix in the gather function
+        for(int i = 0;i<numproc;i++){
+            calcule_r_line_r_colon(save_line, save_colum, N_r_matrix,r_x_nb_lines, r_colone,start);
+
+            circuler(&save_line,&r_x_nb_lines);// we change the size of matrix
+                                                        // therefore we update the variable r_x_nb_lines
+                                                        // by giving its address to the function circuler.
+
+            start = mod(start-r_x_nb_lines/N,N); // start at the new line given by the number of r lines we have
+                                                    // after each circulation
+
+        }
+
+        int nb_to_send = save_r_x_nb_lines;
+        int nb_to_recv;
+        if (rank == 0)nb_to_recv = mult_of_lines * N; // for gathering the process 0 must know how many r line
+                                                        // each process has. because we're using a ring structure
+                                                        // for transferring data between process.
+        else nb_to_recv = save_r_x_nb_lines;
+        long* recieve_the_mat = malloc(sizeof(long) * int_size_of_mat);
+
+        long* linearisedN_x_rMatrix = lineariser_column(N_r_matrix, save_r_x_nb_lines);
+        gather(linearisedN_x_rMatrix,nb_to_send,recieve_the_mat,nb_to_recv); // each process has computed it's N x r column
+                                                                                // we're gathering inside p0 as table 1D
+        //free the memory at each iteration.
+        free(linearisedN_x_rMatrix);
+        w_power_i = create_matrix_from_table(recieve_the_mat); // transforming 1D table into a matrix.
+        free(recieve_the_mat);
+        w = w_power_i;
+
+        if(rank == 0){
+            //we  store the current time in end
+            gettimeofday(&end_ticking, NULL);
+
+            // Uncomment the bellow printf(...) to see the time of each iteration of the process P0.
+
+            //timeval is a struct with 2 parts for time, one in seconds and the other in
+            //microseconds. So we convert everything to microseconds before computing
+            //the elapsed time
+            //printf("time = %ld\n", ((end_ticking.tv_sec * 1000000 + end_ticking.tv_usec)
+            //               - (start_ticking.tv_sec * 1000000 + start_ticking.tv_usec)));
+
+            #pragma omp parallel for
+            for(int count_r = 0;count_r<N;count_r++){
+                free(N_r_matrix[count_r]);
+            }
+            free(N_r_matrix);
+        }
     }
 
+    if(rank == 0){ // free the heap
+
+        print(w);
+        destroy_matrix(&A);
+        destroy_matrix(&w);
+
+        free(save_colum);
+        free(save_line);
+
+    }
+
+}
+
+
+int main(int argc, char *argv[]) {
+
+    MPI_Init(&argc, &argv);
+    MPI_Comm_size(MPI_COMM_WORLD, &numproc);
+    MPI_Comm_rank(MPI_COMM_WORLD, &rank);
+
+    floyd_workshall(argv);
+
     MPI_Finalize();
+
     return 0;
 }

@@ -5,11 +5,11 @@ Normalement mon programme gère toutes les cas:
 Calcul plus court chemin avec N multiple de P.
 Gestion des matrices très grandes et calcul long.
 Gestion du déséquilibre dans le calcul, i.e N non multiple de P.
-Gestion de N < P, attention! , pour de très grand matrice c'est long par exemple si vous donner une matrice de tailler 128 x 128
-et P = 130 durée d'attente très long.
+Gestion de N < P, attention! , pour de très grand matrice c'est long. Par exemple si vous donner une matrice de taille
+128 x 128 et P = 130. Durée d'attente très long.
 
 La circulation des données entre les processus est en format d'anneau unidirectionnelle (comme demandé) 
 
 J'ai utilisé openMp pour paralléliser les fonctions qui transforment une matrice (un tableau) en un tableau (une matrice).
-Mais aussi dans les fonctions de scatter/gather quand on reçoit les données et avant les envoyés/recevoir je parallélise la boucle for qui va enregister ces
-données dans un tableau.
+Mais aussi dans les fonctions de scatter/gather quand on reçoit les données et avant les envoyés/recevoir je parallélise
+la boucle for qui va enregister ces données dans un tableau.

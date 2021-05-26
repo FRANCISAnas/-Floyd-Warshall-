@@ -38,14 +38,14 @@ void destroy_matrix(Matrix *table);// O(1) in parallel
 void print(Matrix mat);// O(N²)
 Matrix transpose(Matrix mat);// O(1) in parallel
 long* lineariser (Matrix A);// O(1) in parallel
-Matrix read_file(char** argv);// O(N)
+Matrix read_file(char** argv);// O(N) size of the file (one iteration)
 long* lineariser_column(long** matrix, int r_x_nb_lines);// O(1) in parallel
-void scatter_line(Matrix A,long* save_data,int recv_count);// O(l+Bt)
-void scatter_colum(Matrix A,long* save_data,int recv_count); // O(l+Bt)
-void broadcast(int* size_of_mat);// O(l+Bt)
+void scatter_line(Matrix A,long* save_data,int recv_count);// O(p-1)(l+Bt)
+void scatter_colum(Matrix A,long* save_data,int recv_count); // O(p-1)(l+Bt)
+void broadcast(int* size_of_mat);// O(p-1)(l+Bt) broadcast the size of matrix to all process
 Matrix create_matrix_from_table(long *tab);// O(1) in parallel
 void circuler(long** r_line_tmp, int *size); // O(1) each process is going to send/receive
-void gather(long* data,int nb_to_send,long* save_into,int nb_to_recv);
+void gather(long* data,int nb_to_send,long* save_into,int nb_to_recv);// O(p-1)(l+Bt)
 void calcule_r_line_r_colon(long *save_line,long * save_column,
                             long ** N_r_matrix,int r_x_nb_lines, int r_colone, int start);
 long minimum(long a, long b); // O(1)
@@ -565,7 +565,7 @@ void floyd_workshall(char**argv){
         }
     }
 
-    if(rank == 0){ // free the heap
+    if(rank == 0){ // we free the heap
 
         print(w);
         destroy_matrix(&A);

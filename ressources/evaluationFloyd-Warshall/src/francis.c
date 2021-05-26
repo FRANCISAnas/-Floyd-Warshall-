@@ -153,8 +153,6 @@ Matrix read_file(char** argv){
 }
 
 
-
-
 long* lineariser_column(long** matrix, int r_x_nb_lines){
     long* to_ret = malloc(sizeof(long)* r_x_nb_lines);
     int r_line = r_x_nb_lines/N;
@@ -167,6 +165,7 @@ long* lineariser_column(long** matrix, int r_x_nb_lines){
     }
     return to_ret;
 }
+
 
 void scatter_line(Matrix A,long* save_data,int recv_count){
     MPI_Status status;
@@ -200,6 +199,7 @@ void scatter_line(Matrix A,long* save_data,int recv_count){
     }
 }
 
+
 void scatter_colum(Matrix A,long* save_data,int recv_count){
     MPI_Status status;
 
@@ -231,7 +231,6 @@ void scatter_colum(Matrix A,long* save_data,int recv_count){
         }
     }
 }
-
 
 
 void broadcast(int* size_of_mat){
@@ -338,7 +337,6 @@ void calcule_r_line_r_colon(long *save_line,long * save_colum, long ** N_r_matri
     int r_line = r_x_nb_lines/N;
 
     for(int i = 0;i<r_line;i++){
-        #pragma omp parallel num_threads(3)
         for(int j = 0;j<r_colone;j++){
             long cur_min = INFINI;
 
@@ -372,7 +370,7 @@ Matrix compute_and_get_w_from(Matrix mat){
     for(int i = 0;i<mat->nb_line;i++){
         #pragma omp parallel for
         for(int j = 0;j<mat->nb_colon;j++){
-            if(i == j && mat->tab[i][j] == 0){
+            if(i == j){
                 to_ret->tab[i][j] = 0;
             }
             else if(mat->tab[i][j] > 0){
@@ -388,6 +386,7 @@ Matrix compute_and_get_w_from(Matrix mat){
 }
 
 
+// this function will return the nb of line at which each process will start knowing it's rank and r, r = nb_lines/numproc
 int get_start_line(int r_x_N){
     if(rank == 0)return 0;
 
@@ -397,6 +396,7 @@ int get_start_line(int r_x_N){
         return biggest_r+(rank-1)*r_x_N;
     }
 }
+
 
 // found on stackOverFlow
 int mod(int a, int b)
@@ -413,7 +413,14 @@ void computation(Matrix* address_w, int* address_r_x_nb_lines,int mult_of_lines 
     Matrix w_power_i = NULL;
     int r_colone = r_x_nb_lines/N;
 
-    int save_r_x_nb_lines = r_x_nb_lines;
+    int save_r_x_nb_lines = r_x_nb_lines; // r x nb_lines is nb of elements in each r line.
+                                            // it's different for the process 0 if N is not a multiple of N
+                                            // as the process 0 will take the rest of remaining lines
+                                            // result of euclidean division between nb of line of the matrix and
+                                            // nb of process.
+                                            // this variable will be update at each circulation. Therefore the
+                                            // other process will have this huge number of lines to compute it with
+                                            // their column.
     long* save_line = malloc(sizeof(long)*r_x_nb_lines);
     long* save_colum = malloc(sizeof(long)*r_x_nb_lines);
     scatter_colum(w, save_colum, r_x_nb_lines); // all process will have the same line as we're going to compute w^i x w
@@ -438,7 +445,9 @@ void computation(Matrix* address_w, int* address_r_x_nb_lines,int mult_of_lines 
         for(int i = 0;i<numproc;i++){
             calcule_r_line_r_colon(save_line, save_colum, N_r_matrix,r_x_nb_lines, r_colone,start);
 
-            circuler(&save_line,address_r_x_nb_lines);
+            circuler(&save_line,address_r_x_nb_lines);// we change the size of matrix
+                                                        // therefore we update the variable r_x_nb_lines
+                                                        // by giving its address to the function circuler.
 
             r_x_nb_lines = *address_r_x_nb_lines;
 
@@ -452,14 +461,14 @@ void computation(Matrix* address_w, int* address_r_x_nb_lines,int mult_of_lines 
         int nb_to_recv;
         if (rank == 0)nb_to_recv = mult_of_lines * N; // for gathering the process 0 must know how many r line
                                                         // each process has. because we're using a ring structure
-                                                        // for transfering datas between process.
+                                                        // for transferring data between process.
         else nb_to_recv = r_x_nb_lines;
         long* recieve_the_mat = malloc(sizeof(long) * int_size_of_mat);
 
         long* linearisedN_x_rMatrix = lineariser_column(N_r_matrix, r_x_nb_lines);
         gather(linearisedN_x_rMatrix,nb_to_send,recieve_the_mat,nb_to_recv); // each process has computed it's column
                                                                                 // we're gethering inside p0 as table 1D
-        //free the memmory at each iteration.
+        //free the memory at each iteration.
         free(linearisedN_x_rMatrix);
         w_power_i = create_matrix_from_table(recieve_the_mat); // transforming 1D table into 2D table.
         free(recieve_the_mat);
@@ -468,6 +477,7 @@ void computation(Matrix* address_w, int* address_r_x_nb_lines,int mult_of_lines 
             //we  store the current time in end
             gettimeofday(&end_ticking, NULL);
 
+            // Uncomment the bellow printf(...) to see the time of each iteration of the process P0.
 
             //timeval is a struct with 2 parts for time, one in seconds and the other in
             //microseconds. So we convert everything to microseconds before computing
@@ -480,15 +490,13 @@ void computation(Matrix* address_w, int* address_r_x_nb_lines,int mult_of_lines 
             }
             free(N_r_matrix);
         }
-
     }
 
     *address_w = w;
-    if(rank == 0){
+    if(rank == 0){ // free the heap
         free(save_colum);
         free(save_line);
 
-        //destroy_matrix(&w_power_i);
     }
 
 }
@@ -514,6 +522,7 @@ void initialization(char** argv,Matrix* address_A, Matrix* address_w, int* add_r
     *address_A = A;
     *add_r_x_nb_lines = r_x_nb_lines;
 }
+
 
 int main(int argc, char *argv[]) {
     MPI_Init(&argc, &argv);

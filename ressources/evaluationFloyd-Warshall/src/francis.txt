@@ -1,4 +1,4 @@
-les fonctionnalité immplémentés:
+Les fonctionnalité immplémentés:
 
 Normalement mon programme gère toutes les cas:
 

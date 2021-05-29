@@ -10,8 +10,8 @@
 #include <string.h>
 #include <limits.h>
 
-int rank; int numproc;
-long ** result_scatter;
+int rank;
+int numproc;
 int r;
 int int_size_of_mat;
 int N;
@@ -481,7 +481,7 @@ void floyd_workshall(char**argv){
     Matrix w_power_i = NULL;
     int r_colone = r_x_nb_lines/N;
 
-    int save_r_x_nb_lines = r_x_nb_lines; // r x nb_lines is nb of elements in each r line.
+    int save_r_x_nb_lines = r_x_nb_lines; // r x nb_lines is nb of elements for each r line.
                                             // it's different for the process 0 if N is not a multiple of N
                                             // as the process 0 will take the rest of remaining lines
                                             // result of euclidean division between nb of line of the matrix and
@@ -556,13 +556,13 @@ void floyd_workshall(char**argv){
             //the elapsed time
             //printf("time = %ld\n", ((end_ticking.tv_sec * 1000000 + end_ticking.tv_usec)
             //               - (start_ticking.tv_sec * 1000000 + start_ticking.tv_usec)));
-
-            #pragma omp parallel for
-            for(int count_r = 0;count_r<N;count_r++){
-                free(N_r_matrix[count_r]);
-            }
-            free(N_r_matrix);
         }
+
+        #pragma omp parallel for
+        for(int count_r = 0;count_r<N;count_r++){
+            free(N_r_matrix[count_r]);
+        }
+        free(N_r_matrix);
     }
 
     if(rank == 0){ // we free the heap
